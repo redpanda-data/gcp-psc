@@ -1,0 +1,90 @@
+#!/bin/sh
+
+exec 3>&1 4>&2
+trap 'exec 2>&4 1>&3' 0 1 2 3
+exec 1> /tmp/startup.log 2>&1
+
+apt update
+apt install -y haproxy unzip
+
+cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.template
+
+curl -LO https://github.com/redpanda-data/redpanda/releases/latest/download/rpk-linux-amd64.zip
+unzip rpk-linux-amd64.zip -d /usr/local/bin/
+
+echo "
+frontend stats
+    mode http
+    bind *:8404
+    stats enable
+    stats uri /stats
+    stats refresh 10s
+    stats admin if LOCALHOST
+" >> /etc/haproxy/haproxy.cfg.template
+
+echo "
+
+if { set -C; 2>/dev/null >/tmp/haproxy.lock; }; then
+  trap \"rm -f /tmp/haproxy.lock\" EXIT
+else
+  echo \"Lock file exists... exiting\"
+  exit
+fi
+
+export REDPANDA_BROKERS=\"${seed-broker}\"
+HOSTS=\$(rpk cluster info --tls-enabled --user ${seed-user} --password ${seed-password} | grep RACK -A10 | grep -v RACK | sed -e '/^$/d' | awk '{print \$2}')
+for HOST in \$HOSTS; do
+  ID=\$(echo \$HOST | cut -f1 -d'-')
+  for PORT in ${ports}; do
+    FE=\$((\$PORT + \$ID * ${port-increment}))
+    echo \"
+frontend \$FE
+  bind *:\$FE
+  option tcplog
+  mode tcp
+  use_backend \$FE
+
+backend \$FE
+  mode tcp
+  balance roundrobin
+  server \$FE \$HOST:\$PORT check
+\" >> /tmp/config
+  done
+done
+
+cat /etc/haproxy/haproxy.cfg.template /tmp/config > /etc/haproxy/haproxy.cfg.staging
+rm /tmp/config
+echo proxy checked at \$(date) >> /tmp/bounce.log
+diff /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.staging
+error=\$?
+if [ \$error -eq 1 ]
+then
+  mv /etc/haproxy/haproxy.cfg.staging /etc/haproxy/haproxy.cfg
+  systemctl reload haproxy
+else
+  rm /etc/haproxy/haproxy.cfg.staging
+fi
+
+" > /usr/local/bin/bounce-haproxy.sh
+
+chmod 700 /usr/local/bin/bounce-haproxy.sh
+
+/usr/local/bin/bounce-haproxy.sh
+
+bash -c 'echo "* * * * * root (/usr/local/bin/bounce-haproxy.sh)" >> /etc/crontab'
+
+echo "
+if { set -C; 2>/dev/null >/tmp/dns.lock; }; then
+  trap \"rm -f /tmp/dns.lock\" EXIT
+else
+  echo \"Lock file exists... exiting\"
+  exit
+fi
+curl -v --header \"Content-Type: application/json\" --request POST --data '{\"user\":\"${seed-user}\",\"password\":\"${seed-password}\",\"seed\":\"${split(":", seed-broker)[0]}:30092\",\"prefix\":\"${prefix}\",\"credentials\":\"${credentials}\"}' ${update-url}
+" > /usr/local/bin/ensure-dns.sh
+
+chmod 700 /usr/local/bin/ensure-dns.sh
+
+/usr/local/bin/ensure-dns.sh
+
+bash -c 'echo "* * * * * root (/usr/local/bin/ensure-dns.sh)" >> /etc/crontab'
