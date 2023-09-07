@@ -191,19 +191,19 @@ resource "google_compute_subnetwork" "haproxy-network-subnet" {
 }
 
 # Debug: Firewall rule to allow SSH access
-resource "google_compute_firewall" "ssh-to-proxy-network" {
-  name    = "${var.prefix}-ssh-firewall-rule"
-  network = google_compute_network.proxy-network.name
-  allow {
-    protocol = "all"
-  }
-  source_ranges = ["81.2.85.104"]
-  direction     = "INGRESS"
-  priority      = 1
-  log_config {
-    metadata = "INCLUDE_ALL_METADATA"
-  }
-}
+#resource "google_compute_firewall" "ssh-to-proxy-network" {
+#  name    = "${var.prefix}-ssh-firewall-rule"
+#  network = google_compute_network.proxy-network.name
+#  allow {
+#    protocol = "all"
+#  }
+#  source_ranges = ["your.ip.here"]
+#  direction     = "INGRESS"
+#  priority      = 1
+#  log_config {
+#    metadata = "INCLUDE_ALL_METADATA"
+#  }
+#}
 
 # Firewall rule to allow
 resource "google_compute_firewall" "internal" {
